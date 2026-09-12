@@ -2,11 +2,13 @@ name: 채용공고 감시
 
 on:
   schedule:
-    # 30분마다. 회사 수가 많고 그중 절반 이상이 Playwright로 브라우저를 띄워서 읽기
-    # 때문에(1회 실행에 약 1~2분) 15분보다 여유를 뒀다 - private 저장소는 GitHub
-    # Actions 무료 사용량(월 2000분)이 있으니 필요하면 이 값을 조정하거나, 저장소를
-    # public으로 돌려 무제한 사용량을 쓰는 걸 고려할 것.
-    - cron: "*/30 * * * *"
+    # 2시간마다. 회사가 20곳이고 그중 절반 이상이 Playwright로 브라우저를 띄워서
+    # 읽기 때문에 시간이 좀 걸린다(브라우저 캐시 적용 후 1회 실행 약 2~3분).
+    # private 저장소는 GitHub Actions 무료 사용량이 월 2000분이라, 2시간 간격이면
+    # 한 달 약 900~1000분 정도로 여유 있게 맞춘 것 - 채용공고는 며칠~몇 주씩 열려
+    # 있으니 이 정도 지연은 문제없다. 저장소를 public으로 돌리면 무제한 사용량이라
+    # 필요하면 아래 cron을 15~30분 간격으로 당겨도 된다.
+    - cron: "0 */2 * * *"
   workflow_dispatch: {}
 
 # 같은 워크플로우가 겹쳐 돌면서 state.json에 서로 다른 커밋을 만들지 않도록 직렬화
@@ -25,11 +27,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: hanwha-recruit-alert/requirements.txt
 
       - name: Install dependencies
         run: pip install -r hanwha-recruit-alert/requirements.txt
 
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-1.61.0
+
       - name: Install Playwright browser
+        # 캐시가 있으면 브라우저 바이너리 다운로드(가장 오래 걸리는 부분)를 건너뛴다.
+        # 시스템 라이브러리(--with-deps)는 캐시 대상이 아니라 매번 설치하지만 몇 초면 끝난다.
         run: python -m playwright install --with-deps chromium
 
       - name: Run watcher

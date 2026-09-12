@@ -72,7 +72,7 @@ python watch.py
 
 ## 3. GitHub Actions로 자동 실행 (깃허브 연동)
 
-이 폴더를 GitHub 저장소에 올리면 `.github/workflows/watch.yml`이 **30분마다 자동 실행**되며,
+이 폴더를 GitHub 저장소에 올리면 `.github/workflows/watch.yml`이 **2시간마다 자동 실행**되며,
 새 공고를 텔레그램으로 보내고 `state.json`을 커밋해 다음 실행에서도 기억한다.
 
 1. GitHub에 새 저장소를 만들고 이 폴더 내용을 push한다.
@@ -83,10 +83,12 @@ python watch.py
    `workflow_dispatch`로 수동 실행(Run workflow 버튼)도 가능하다.
 
 > **실행 시간 / 사용량 참고**: 회사 절반 이상이 Playwright로 브라우저를 띄워 페이지를
-> 읽기 때문에 1회 실행에 1~2분 정도 걸린다. GitHub Actions는 **public 저장소는 무제한**,
-> **private 저장소는 월 2000분 무료**다. 30분 간격이면 한 달에 대략 40~90시간 정도
-> 사용량이 나올 수 있어 private로 오래 돌릴 계획이면 저장소를 public으로 전환하거나
-> (state.json에 개인정보가 없으니 공개해도 무방), cron 간격을 늘리는 것을 권장한다.
+> 읽기 때문에 1회 실행에 시간이 좀 걸린다(브라우저 캐싱 적용 후 약 2~3분). GitHub
+> Actions는 **public 저장소는 무제한**, **private 저장소는 월 2000분 무료**다. 기본값인
+> 2시간 간격이면 한 달 약 900~1000분 정도라 무료 한도 안에서 여유 있게 돈다. 채용공고는
+> 보통 며칠~몇 주씩 열려있어 2시간 지연은 실질적으로 문제없다. 저장소를 public으로
+> 전환하면(state.json에 개인정보가 없으니 공개해도 무방) 무제한 사용량이 되니, 더 빠른
+> 알림이 필요하면 `.github/workflows/watch.yml`의 cron을 15~30분 간격으로 당기면 된다.
 
 ## 4. 회사 추가/수정하기
 
