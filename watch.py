@@ -1,9 +1,11 @@
 """
-한화인(hanwhain.com) 채용공고 신규 등록 감시 -> 텔레그램 알림
+여러 회사의 채용 사이트를 감시하다가 신규 공고가 올라오면 텔레그램으로 알린다.
 
-한화그룹 통합 채용 사이트인 한화인은 화면에 보이는 HTML이 아니라
-내부 JSON API(hwadm.hanwhain.com)에서 채용공고 목록을 받아와 그린다.
-그 API를 그대로 호출해서 계열사(예: 한화손보)별 신규 공고를 감지한다.
+회사마다 사이트 구조가 다 다르기 때문에, "그 회사 목록을 어떻게 가져올지"는
+sources/*.py 에 회사(또는 그 회사가 쓰는 채용시스템)별로 따로 구현되어 있고,
+이 파일은 그 결과(core.Posting)만 보고 신규 여부 판단 + 텔레그램 전송을 담당한다.
+
+새 회사를 추가하는 방법은 README.md 참고.
 
 사용법:
     python watch.py
@@ -19,138 +21,43 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import requests
 
-# 감시할 한화 계열사. sdSeq는 www.hanwhain.com 이 내부적으로 쓰는 계열사 코드.
-# (search-sbsd API 응답에서 확인함: "한화손보" -> 202)
-# 다른 계열사를 추가하고 싶으면 이 dict에 "표시할 이름": sdSeq 만 추가하면 된다.
-WATCHED_COMPANIES: dict[str, int] = {
-    "한화손해보험": 202,
-}
-
-API_BASE = "https://hwadm.hanwhain.com/new-backend/portal/api/rcRecruit"
-LIST_URL = f"{API_BASE}/search-rcrt"
-DETAIL_URL = f"{API_BASE}/get-rcrt"
-DETAIL_PAGE_URL = "https://www.hanwhain.com/portal/apply/recruit/detail?rtSeq={rt_seq}"
+from core import Posting
+from sources import ALL_SOURCES
 
 STATE_PATH = Path(__file__).parent / "state.json"
 
-COMMON_HEADERS = {
-    "Content-Type": "application/json",
-    "Accept": "application/json",
-    "Origin": "https://www.hanwhain.com",
-    "Referer": "https://www.hanwhain.com/portal/apply/recruit",
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
-}
 
-
-@dataclass
-class JobPosting:
-    rt_seq: int
-    title: str
-    company: str
-    start_dt: str
-    end_dt: str
-
-    @property
-    def url(self) -> str:
-        return DETAIL_PAGE_URL.format(rt_seq=self.rt_seq)
-
-
-def fetch_postings(sd_seq: int) -> list[JobPosting]:
-    """지정한 계열사(sdSeq)의 채용공고 목록 전체를 가져온다."""
-    postings: list[JobPosting] = []
-    page = 0
-    while True:
-        body = {
-            "langCd": "ko",
-            "searchText": "",
-            "sdSeqList": [sd_seq],
-            "rtNrcrtYn": "",
-            "rtCarrYn": "",
-            "rtIntnYn": "",
-            "rtPermanentWorkYn": "",
-            "rtTempWorkYn": "",
-            "djSeqList": None,
-            "rjSeqList": None,
-            "page": page,
-            "size": 50,
-        }
-        resp = requests.post(LIST_URL, json=body, headers=COMMON_HEADERS, timeout=15)
-        resp.raise_for_status()
-        payload = resp.json()
-        if not payload.get("success"):
-            raise RuntimeError(f"목록 조회 실패: {payload}")
-
-        data = payload["data"]
-        for item in data["list"]:
-            postings.append(
-                JobPosting(
-                    rt_seq=item["rtSeq"],
-                    title=item["rtNm"].strip(),
-                    company=item["sdNm"],
-                    start_dt=item["rtAcptStrtDttm"],
-                    end_dt=item["rtAcptEndDttm"],
-                )
-            )
-
-        if not data.get("hasNext"):
-            break
-        page += 1
-
-    return postings
-
-
-def fetch_detail(rt_seq: int) -> dict:
-    """공고 상세 내용을 가져온다 (근무지, 자격요건 등)."""
-    body = {"rtSeq": rt_seq, "hidnKey": None, "langCd": "ko"}
-    resp = requests.post(DETAIL_URL, json=body, headers=COMMON_HEADERS, timeout=15)
-    resp.raise_for_status()
-    payload = resp.json()
-    if not payload.get("success"):
-        raise RuntimeError(f"상세 조회 실패: {payload}")
-    return payload["data"]["item"]
-
-
-def load_seen_state() -> dict[str, list[int]]:
+def load_seen_state() -> dict[str, list[str]]:
     if STATE_PATH.exists():
         return json.loads(STATE_PATH.read_text(encoding="utf-8"))
     return {}
 
 
-def save_seen_state(state: dict[str, list[int]]) -> None:
+def save_seen_state(state: dict[str, list[str]]) -> None:
     STATE_PATH.write_text(
         json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
 
-def build_message(posting: JobPosting, detail: dict) -> str:
+def build_message(posting: Posting, detail_lines: list[str]) -> str:
     lines = [
         f"🆕 신규 채용공고 - {posting.company}",
-        f"",
+        "",
         f"📌 {posting.title}",
-        f"🗓 접수기간: {posting.start_dt} ~ {posting.end_dt}",
     ]
+    if posting.start_dt or posting.end_dt:
+        lines.append(f"🗓 접수기간: {posting.start_dt} ~ {posting.end_dt}")
 
-    quals = (detail.get("rtExmQlf") or "").strip()
-    if quals:
-        if len(quals) > 400:
-            quals = quals[:400] + "…"
-        lines.append(f"\n✅ 지원자격\n{quals}")
+    for extra in detail_lines:
+        lines.append("")
+        lines.append(extra)
 
-    units = detail.get("unitDt") or []
-    for unit in units[:3]:  # 직무가 많으면 앞의 몇 개만
-        workpl = unit.get("ruWorkpl")
-        if workpl:
-            lines.append(f"\n📍 근무지({unit.get('ruNm', '')}): {workpl}")
-
-    lines.append(f"\n🔗 {posting.url}")
+    lines.append("")
+    lines.append(f"🔗 {posting.url}")
     return "\n".join(lines)
 
 
@@ -182,56 +89,51 @@ def main() -> int:
     state_changed = False
     had_error = False
 
-    for company_name, sd_seq in WATCHED_COMPANIES.items():
-        key = str(sd_seq)
-        seen_ids = set(state.get(key, []))
+    for source in ALL_SOURCES:
+        seen_ids = set(state.get(source.key, []))
 
         try:
-            postings = fetch_postings(sd_seq)
+            postings = source.fetch_postings()
         except Exception as exc:  # noqa: BLE001
-            print(f"[{company_name}] 목록 조회 중 오류: {exc}", file=sys.stderr)
+            print(f"[{source.display_name}] 목록 조회 중 오류: {exc}", file=sys.stderr)
             had_error = True
             continue
 
-        current_ids = {p.rt_seq for p in postings}
+        by_id = {p.id: p for p in postings}
+        current_ids = set(by_id)
         new_ids = current_ids - seen_ids
-        notified_ids: set[int] = set()
+        notified_ids: set[str] = set()
 
         if is_first_run:
             # 첫 실행에서는 기존 공고를 전부 "신규"로 알리지 않고 기준선만 저장한다.
-            print(f"[{company_name}] 첫 실행: 기존 공고 {len(current_ids)}건을 기준으로 저장합니다.")
+            print(f"[{source.display_name}] 첫 실행: 기존 공고 {len(current_ids)}건을 기준으로 저장합니다.")
             notified_ids = new_ids
         elif new_ids:
-            print(f"[{company_name}] 신규 공고 {len(new_ids)}건 발견")
-            for posting in postings:
-                if posting.rt_seq not in new_ids:
-                    continue
+            print(f"[{source.display_name}] 신규 공고 {len(new_ids)}건 발견")
+            for posting_id in new_ids:
+                posting = by_id[posting_id]
                 try:
-                    detail = fetch_detail(posting.rt_seq)
-                    message = build_message(posting, detail)
+                    detail_lines = source.fetch_detail_lines(posting)
                 except Exception as exc:  # noqa: BLE001
-                    print(f"  상세 조회 실패(rtSeq={posting.rt_seq}): {exc}", file=sys.stderr)
-                    message = (
-                        f"🆕 신규 채용공고 - {posting.company}\n\n"
-                        f"📌 {posting.title}\n"
-                        f"🗓 접수기간: {posting.start_dt} ~ {posting.end_dt}\n\n"
-                        f"🔗 {posting.url}"
-                    )
+                    print(f"  상세 조회 실패(id={posting_id}): {exc}", file=sys.stderr)
+                    detail_lines = []
+
+                message = build_message(posting, detail_lines)
                 try:
                     send_telegram_message(message)
-                    notified_ids.add(posting.rt_seq)
+                    notified_ids.add(posting_id)
                     time.sleep(1)  # 텔레그램 rate limit 여유
                 except Exception as exc:  # noqa: BLE001
-                    print(f"  텔레그램 전송 실패(rtSeq={posting.rt_seq}): {exc}", file=sys.stderr)
+                    print(f"  텔레그램 전송 실패(id={posting_id}): {exc}", file=sys.stderr)
                     had_error = True
-                    # 이 rtSeq는 seen_ids에 넣지 않아 다음 실행에서 다시 시도한다.
+                    # 이 공고는 seen_ids에 넣지 않아 다음 실행에서 다시 시도한다.
         else:
-            print(f"[{company_name}] 신규 공고 없음 (현재 {len(current_ids)}건)")
+            print(f"[{source.display_name}] 신규 공고 없음 (현재 {len(current_ids)}건)")
 
         # 알림을 못 보낸 신규 공고는 다음 실행에서 재시도하도록 seen 처리에서 제외한다.
         updated_seen = seen_ids | notified_ids | (current_ids - new_ids)
         if updated_seen != seen_ids:
-            state[key] = sorted(updated_seen)
+            state[source.key] = sorted(updated_seen)
             state_changed = True
 
     if state_changed:

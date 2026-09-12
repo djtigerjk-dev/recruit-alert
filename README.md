@@ -1,22 +1,43 @@
-# 한화 채용공고 감시 -> 텔레그램 알림
+# 보험사 채용공고 감시 -> 텔레그램 알림
 
-한화그룹 통합 채용 사이트 [한화인](https://www.hanwhain.com)은 화면 HTML이 아니라
-내부 JSON API(`hwadm.hanwhain.com`)로 채용공고 목록을 받아온다. 이 스크립트는 그 API를
-직접 호출해서, 지정한 계열사(기본값: **한화손해보험**)에 신규 공고가 올라오면 그 즉시
-텔레그램으로 제목/접수기간/지원자격/URL을 알려준다.
-
-HTML 구조를 긁는 방식이 아니라 사이트가 실제로 쓰는 API를 호출하기 때문에, 사이트
-디자인이 바뀌어도(= HTML 클래스명이 바뀌어도) 잘 깨지지 않는다.
+여러 보험/금융사의 채용 사이트를 감시하다가 신규 공고가 올라오면 그 즉시 텔레그램으로
+제목/기간/URL을 알려준다. 회사마다 채용 사이트 구조가 다 다르기 때문에, 가능한 경우
+그 사이트가 실제로 쓰는 내부 API를 직접 호출하고, API를 찾기 어려운 곳은 Playwright로
+실제 브라우저처럼 페이지를 렌더링해서 읽는다 — 단순 HTML 요청만으로는 안 되는(=예전에
+"회사마다 잘 안 되던") 사이트가 대부분 이 두 방식 중 하나로 해결된다.
 
 ## 동작 방식
 
-1. `search-rcrt` API에 계열사 코드(`sdSeq`)를 넣어 호출 → 현재 올라온 공고 목록(고유 ID `rtSeq` 포함)을 받는다.
-2. 직전 실행 때 저장해 둔 `state.json`과 비교해서 새로 생긴 `rtSeq`를 찾는다.
-3. 새 공고가 있으면 `get-rcrt` API로 상세 내용(지원자격, 근무지 등)을 가져와 텔레그램 메시지로 보낸다.
-4. 이번에 확인한 `rtSeq` 전체를 `state.json`에 다시 저장한다.
+1. 회사별 어댑터(`sources/*.py`)가 각자의 방식으로 현재 목록을 가져온다.
+2. 직전 실행 때 저장해 둔 `state.json`과 비교해서 새로 생긴 공고 ID를 찾는다.
+3. 새 공고가 있으면 텔레그램 메시지로 보낸다 (실패하면 다음 실행에서 재시도).
+4. 이번에 확인한 공고 ID를 `state.json`에 다시 저장한다.
 
 **첫 실행**에서는 이미 올라와 있던 공고를 전부 "신규"로 알리지 않는다. 기준선만 저장하고,
 그 다음 실행부터 새로 올라오는 공고만 알린다.
+
+## 현재 감시 중인 회사 (20개)
+
+| 회사 | 방식 | 비고 |
+|---|---|---|
+| 한화손해보험 / 한화생명 / 한화생명금융서비스 | 공식 JSON API (hanwhain.com) | 한화그룹 통합 포탈 |
+| 삼성화재 / 삼성생명 | 공식 폼 API (samsungcareers.com) | 삼성 통합 포탈. 개별 링크가 없어 회사 채용 페이지로 연결 |
+| KB손해보험 | 공식 JSON API (careers.kbfg.com) | KB금융그룹 통합 포탈 |
+| 현대해상 | Playwright (recruiter.co.kr) | |
+| DB손해보험 | Playwright (recruiter.co.kr) | DB그룹 통합 포탈, 제목 접두어로 필터링 |
+| 롯데손해보험 | Playwright (recruiter.co.kr) | |
+| 신한라이프 | Playwright (recruiter.co.kr) | |
+| 흥국생명 / 흥국화재 | Playwright (recruiter.co.kr) | 태광그룹 통합 포탈, 제목 접두어로 필터링 |
+| 라이나생명 / 라이나손해보험 | Playwright (그리팅 greetinghr.com) | |
+| 악사손해보험 | Playwright (그리팅 greetinghr.com) | |
+| 카카오페이손해보험 | Playwright (그리팅, 자체 도메인) | |
+| 메리츠화재 | requests + BeautifulSoup (SSR HTML) | 개별 링크가 없어 목록 페이지로 연결 |
+| 동양생명 | 공식 JSON API (myangel.co.kr) | 개별 링크가 없어 목록 페이지로 연결 |
+| 메트라이프생명 | Playwright (metlifecareers.com) | 1페이지(최신)만 확인 |
+| 교보생명 | Playwright (career.kyobo.co.kr) | ⚠️ 작성 시점에 진행 중 공고가 0건이라 실제 공고 발생 시 구조 재확인 필요 |
+
+**처브손해보험 / 처브라이프생명보험**은 조사했지만 국내용 채용 사이트를 찾지 못해
+아직 포함하지 않았다. 실제 URL을 알아내면 `sources/`에 같은 패턴으로 추가하면 된다.
 
 ## 1. 텔레그램 봇 준비
 
@@ -34,6 +55,7 @@ HTML 구조를 긁는 방식이 아니라 사이트가 실제로 쓰는 API를 �
 ```bash
 cd hanwha-recruit-alert
 pip install -r requirements.txt
+python -m playwright install chromium
 ```
 
 Windows(PowerShell)에서:
@@ -44,12 +66,13 @@ $env:TELEGRAM_CHAT_ID = "받은 chat id"
 python watch.py
 ```
 
-첫 실행은 알림 없이 `state.json`만 채워진다. 강제로 신규 공고 알림을 테스트해보고 싶으면
-`state.json`을 열어 아무 `rtSeq` 하나를 지운 뒤 다시 실행하면 된다.
+첫 실행은 알림 없이 `state.json`만 채워진다(회사가 20개라 1~2분 정도 걸린다).
+강제로 신규 공고 알림을 테스트해보고 싶으면 `state.json`을 열어 특정 회사 키의 값
+하나를 지운 뒤 다시 실행하면 된다.
 
 ## 3. GitHub Actions로 자동 실행 (깃허브 연동)
 
-이 폴더를 GitHub 저장소에 올리면 `.github/workflows/watch.yml`이 **15분마다 자동 실행**되며,
+이 폴더를 GitHub 저장소에 올리면 `.github/workflows/watch.yml`이 **30분마다 자동 실행**되며,
 새 공고를 텔레그램으로 보내고 `state.json`을 커밋해 다음 실행에서도 기억한다.
 
 1. GitHub에 새 저장소를 만들고 이 폴더 내용을 push한다.
@@ -59,33 +82,24 @@ python watch.py
 3. **Actions** 탭에서 워크플로우가 스케줄대로 도는지 확인한다. 바로 테스트하고 싶으면
    `workflow_dispatch`로 수동 실행(Run workflow 버튼)도 가능하다.
 
-> GitHub Actions의 `schedule` cron은 트래픽이 몰리면 몇 분 정도 밀릴 수 있다(공식적으로 보장된
-> 정확한 주기가 아님). 더 촘촘한 주기가 필요하면 `cron` 값을 조절하거나, 항상 켜져 있는 서버/PC의
-> 작업 스케줄러로 `python watch.py`를 주기 실행해도 된다.
+> **실행 시간 / 사용량 참고**: 회사 절반 이상이 Playwright로 브라우저를 띄워 페이지를
+> 읽기 때문에 1회 실행에 1~2분 정도 걸린다. GitHub Actions는 **public 저장소는 무제한**,
+> **private 저장소는 월 2000분 무료**다. 30분 간격이면 한 달에 대략 40~90시간 정도
+> 사용량이 나올 수 있어 private로 오래 돌릴 계획이면 저장소를 public으로 전환하거나
+> (state.json에 개인정보가 없으니 공개해도 무방), cron 간격을 늘리는 것을 권장한다.
 
-## 4. 다른 계열사 추가하기
+## 4. 회사 추가/수정하기
 
-`watch.py` 상단의 `WATCHED_COMPANIES` 딕셔너리에 `"표시 이름": sdSeq` 를 추가하면 된다.
-`sdSeq`는 한화인 사이트의 계열사 코드로, 현재 확인된 값은 다음과 같다:
+`sources/__init__.py`의 `ALL_SOURCES` 리스트에 항목을 추가하면 된다. 이미 만들어진
+공용 어댑터가 있으니, 새 회사가 아래 플랫폼 중 하나를 쓴다면 설정만 추가하면 된다:
 
-| 계열사 | sdSeq |
-|---|---|
-| 한화손해보험 (한화손보) | 202 |
-| 한화생명 | 201 |
-| 한화솔루션/케미칼 | 197 |
-| 한화솔루션/큐셀 | 198 |
-| 한화에어로스페이스 | 365 |
-| 한화시스템/방산 | 328 |
-| 한화투자증권 | 208 |
-| 한화자산운용 | 207 |
-| (주)한화 건설부문 | 182 |
+- **한화인(hanwhain.com) 포탈 계열사** -> `HanwhaSource(sd_seq=..., display_name=...)`
+  (sd_seq 값은 `sources/hanwha.py` 주석의 `search-sbsd` API로 확인)
+- **recruiter.co.kr 플랫폼** -> `RecruiterPlatformSource(key=..., display_name=..., list_url=...)`
+  (그룹 통합 포탈이면 `title_prefix="[회사명]"` 추가)
+- **그리팅(greetinghr.com) 플랫폼** -> `GreetingHrSource(key=..., display_name=..., list_url=...)`
 
-전체 목록이 필요하면 `search-sbsd` API를 한 번 호출해 `sdNm`/`sdSeq` 매핑을 다시 확인하면 된다.
-
-```bash
-curl -s -X POST https://hwadm.hanwhain.com/new-backend/portal/api/rcRecruit/search-sbsd \
-  -H "Content-Type: application/json" \
-  -H "Origin: https://www.hanwhain.com" \
-  -H "Referer: https://www.hanwhain.com/portal/apply/recruit" \
-  -d '{"langCd":"ko"}'
-```
+완전히 새로운 사이트라면 `sources/` 밑에 새 모듈을 만들어 `core.Source` 인터페이스
+(`key`, `display_name`, `fetch_postings()`, `fetch_detail_lines()`)를 구현하면 된다.
+이미 만들어진 어댑터들(`samsung.py`, `kbfg.py`, `meritzfire.py`, `dongyang.py` 등)이
+"공식 API 찾기 -> 안 되면 Playwright로 렌더링" 순서로 시도한 예시라 참고하기 좋다.
