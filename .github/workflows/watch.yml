@@ -1,0 +1,42 @@
+name: Hanwha 채용공고 감시
+
+on:
+  schedule:
+    # 매 15분마다 (UTC 기준. 한국시간과 무관하게 항상 15분 간격으로 실행됨)
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+# 같은 워크플로우가 겹쳐 돌면서 state.json에 서로 다른 커밋을 만들지 않도록 직렬화
+concurrency:
+  group: hanwha-recruit-alert
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r hanwha-recruit-alert/requirements.txt
+
+      - name: Run watcher
+        working-directory: hanwha-recruit-alert
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python watch.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add hanwha-recruit-alert/state.json
+          git diff --cached --quiet || git commit -m "chore: update seen job postings state"
+          git push
