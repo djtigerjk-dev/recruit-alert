@@ -52,6 +52,10 @@ jobs:
         run: python watch.py
 
       - name: Commit updated state
+        # watch.py가 회사 하나라도 에러(사이트 일시 장애, 텔레그램 전송 실패 등)로 exit 1을
+        # 반환해도 이 스텝은 꼭 돌려야 한다 - 안 그러면 그 실행에서 이미 보낸 알림이
+        # "확인함" 처리가 안 돼서 다음 실행 때 같은 공고를 또 신규로 잡아 중복 알림을 보낸다.
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
