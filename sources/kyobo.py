@@ -1,17 +1,21 @@
 """
 교보생명 채용 사이트(career.kyobo.co.kr).
 
-주의: 이 파일을 작성하는 시점에 교보생명은 진행 중인 공고가 0건이라("등록된 내용이
-없습니다"), 실제 공고가 있을 때의 목록 HTML 구조를 직접 확인하지 못한 채 만들었다.
-`#listBodyall` 안에 `.nodata`가 아닌 `<li>`가 생기면 그 안의 첫 번째 링크를 공고로
-간주하는 방식으로 최대한 유연하게 짰지만, 실제 공고가 올라온 뒤 한 번은 확인이 필요하다.
+목록의 각 공고는 실제 URL이 아니라 `doAction('view','page',C_CD,RE_NO,NOTI_SEQ_NO,'',able_yn)`
+로 숨은 폼을 POST 제출해서 상세를 연다(GET으로 열리는 개별 링크가 없음) - 메리츠화재/
+삼성/동양생명과 같은 패턴이라, 링크는 목록 페이지로 건다. 공고 고유 ID로는 onclick 안의
+RE_NO(두 번째 인자)를 쓴다.
 """
 
 from __future__ import annotations
 
+import re
+
 from core import Posting
 
 LIST_URL = "https://career.kyobo.co.kr/rem/apply/recruit/apply_list.jsp"
+
+_RE_NO_RE = re.compile(r"doAction\('view',\s*'page',\s*'[^']*',\s*'([^']*)'")
 
 
 class KyoboSource:
@@ -29,33 +33,34 @@ class KyoboSource:
                 page.goto(LIST_URL, wait_until="networkidle", timeout=30000)
                 page.wait_for_timeout(1500)
                 raw_items = page.eval_on_selector_all(
-                    "#listBodyall > li:not(.nodata)",
+                    "#listBodyall > li:not(.nodata) > a",
                     """
-                    els => els.map(li => {
-                        const a = li.querySelector('a');
-                        return {
-                            href: a ? a.href : '',
-                            text: li.innerText.trim(),
-                        };
-                    })
+                    els => els.map(a => ({
+                        onclick: a.getAttribute('onclick') || '',
+                        title: (a.querySelector('.subject') || {}).innerText || '',
+                        period: (a.querySelector('.period') || {}).innerText || '',
+                    }))
                     """,
                 )
             finally:
                 browser.close()
 
         postings: list[Posting] = []
-        for idx, item in enumerate(raw_items):
-            text = (item.get("text") or "").strip()
-            if not text:
+        for item in raw_items:
+            title = (item.get("title") or "").strip()
+            if not title:
                 continue
-            title = text.splitlines()[0].strip()
-            href = item.get("href") or LIST_URL
+
+            m = _RE_NO_RE.search(item.get("onclick") or "")
+            re_no = m.group(1) if m else title
+
             postings.append(
                 Posting(
-                    id=href if href != LIST_URL else f"kyobo-{idx}-{title}",
+                    id=re_no,
                     company=self.display_name,
                     title=title,
-                    url=href,
+                    url=LIST_URL,
+                    start_dt=(item.get("period") or "").strip(),
                 )
             )
         return postings
